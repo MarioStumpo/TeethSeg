@@ -17,7 +17,7 @@ config = AppConfig(app)
 
 @app.get("/")
 def read_root():
-    return {"message": "TeethSeg MeshSegNet API by 3DSF Interns! Routee possible: '/api/v1/predict/post_processing' Prediction with post-processing."}
+    return {"message": "TeethSeg MeshSegNet API by 3DSF Interns! Route possible: '/api/v1/predict/post_processing' Prediction with post-processing."}
 
 
 @app.post("/api/v1/predict/post_processing")
@@ -61,7 +61,9 @@ async def predict_and_sendPalpha(file: UploadFile = File(...)):
 
         return {
             'statusCode': 200,
-            'headers': {'Content-Type': 'application/json'},
+            'headers': {'Content-Type': 'application/json',
+                       'Access-Control-Allow-Origin': '*',
+                        'Access-Control-Allow-Credentials': true},
             'body': json.dumps(prediction)
         }
 
