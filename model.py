@@ -3,8 +3,9 @@ import numpy as np
 import torch
 from meshsegnet import *
 import vedo
+from helpers import calculate_distances
 from scipy.spatial import distance_matrix
-from sklearn.svm import SVC 
+from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 import shutil
 import time
@@ -12,47 +13,41 @@ from pygco import cut_from_graph
 
 
 def predict(model, mesh, filename):
+    model_path = './model'
+    model_name = 'Mesh_Segementation_MeshSegNet_15_classes_60samples_best.tar'
 
-    # model_path = './model'
-    # model_name = 'Mesh_Segementation_MeshSegNet_15_classes_60samples_best.tar'
-
-    # mesh_path = '/content/drive/MyDrive/MeshSegNet/test'  # need to define
-    # sample_filenames = ['4.obj'] # need to define
     output_path = './outputs'
 
     if not os.path.exists(output_path):
         os.mkdir(output_path)
 
     num_classes = 15
-    # num_channels = 15
+    num_channels = 15
 
-    # # set model
+    # Set model
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # model = MeshSegNet(num_classes=num_classes, num_channels=num_channels).to(device, dtype=torch.float)
+    model = MeshSegNet(num_classes=num_classes, num_channels=num_channels).to(device, dtype=torch.float)
 
-    # # load trained model
-    # checkpoint = torch.load(os.path.join(model_path, model_name), map_location='cpu')
-    # model.load_state_dict(checkpoint['model_state_dict'])
-    # del checkpoint
-    # model = model.to(device, dtype=torch.float)
+    # Load trained model
+    checkpoint = torch.load(os.path.join(model_path, model_name), map_location='cpu')
+    model.load_state_dict(checkpoint['model_state_dict'])
+    del checkpoint
+    model = model.to(device, dtype=torch.float)
 
-    #cudnn
+    # Enable CUDA optimizations
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.enabled = True
-    
-    
-    
-    with torch.no_grad():
-        for i_sample in range(1): #sample_filenames:
-            
-            print('Predicting Sample filename: {}'.format(filename))
-            # mesh = vedo.load(file)
 
-            # pre-processing: downsampling
+    with torch.no_grad():
+        for i_sample in range(1):  # sample_filenames:
+
+            print('Predicting Sample filename: {}'.format(filename))
+
+            # Pre-processing: downsampling
             if mesh.ncells > 10000:
                 print('\tDownsampling...')
                 target_num = 10000
-                ratio = target_num/mesh.ncells # calculate ratio
+                ratio = target_num / mesh.ncells  # Calculate ratio
                 mesh_d = mesh.clone()
                 mesh_d.decimate(fraction=ratio)
                 predicted_labels_d = np.zeros([mesh_d.ncells, 1], dtype=np.int32)
@@ -60,7 +55,7 @@ def predict(model, mesh, filename):
                 mesh_d = mesh.clone()
                 predicted_labels_d = np.zeros([mesh_d.ncells, 1], dtype=np.int32)
 
-            # move mesh to origin
+            # Move mesh to origin
             print('\tPredicting...')
             points = mesh_d.points()
             mean_cell_centers = mesh_d.center_of_mass()
@@ -69,15 +64,15 @@ def predict(model, mesh, filename):
             ids = np.array(mesh_d.faces())
             cells = points[ids].reshape(mesh_d.ncells, 9).astype(dtype='float32')
 
-            # customized normal calculation; the vtk/vedo build-in function will change number of points
+            # Customized normal calculation; the vtk/vedo built-in function will change number of points
             mesh_d.compute_normals()
             normals = mesh_d.celldata['Normals']
 
-            # move mesh to origin
-            barycenters = mesh_d.cell_centers() # don't need to copy
+            # Move mesh to origin
+            barycenters = mesh_d.cell_centers()  # Don't need to copy
             barycenters -= mean_cell_centers[0:3]
 
-            #normalized data
+            # Normalize data
             maxs = points.max(axis=0)
             mins = points.min(axis=0)
             means = points.mean(axis=0)
@@ -86,22 +81,22 @@ def predict(model, mesh, filename):
             nstds = normals.std(axis=0)
 
             for i in range(3):
-                cells[:, i] = (cells[:, i] - means[i]) / stds[i] #point 1
-                cells[:, i+3] = (cells[:, i+3] - means[i]) / stds[i] #point 2
-                cells[:, i+6] = (cells[:, i+6] - means[i]) / stds[i] #point 3
-                barycenters[:,i] = (barycenters[:,i] - mins[i]) / (maxs[i]-mins[i])
-                normals[:,i] = (normals[:,i] - nmeans[i]) / nstds[i]
+                cells[:, i] = (cells[:, i] - means[i]) / stds[i]  # Point 1
+                cells[:, i + 3] = (cells[:, i + 3] - means[i]) / stds[i]  # Point 2
+                cells[:, i + 6] = (cells[:, i + 6] - means[i]) / stds[i]  # Point 3
+                barycenters[:, i] = (barycenters[:, i] - mins[i]) / (maxs[i] - mins[i])
+                normals[:, i] = (normals[:, i] - nmeans[i]) / nstds[i]
 
             X = np.column_stack((cells, barycenters, normals))
 
-            # computing A_S and A_L
+            # Compute A_S and A_L
             A_S = np.zeros([X.shape[0], X.shape[0]], dtype='float32')
             A_L = np.zeros([X.shape[0], X.shape[0]], dtype='float32')
             D = distance_matrix(X[:, 9:12], X[:, 9:12])
-            A_S[D<0.1] = 1.0
+            A_S[D < 0.1] = 1.0
             A_S = A_S / np.dot(np.sum(A_S, axis=1, keepdims=True), np.ones((1, X.shape[0])))
 
-            A_L[D<0.2] = 1.0
+            A_L[D < 0.2] = 1.0
             A_L = A_L / np.dot(np.sum(A_L, axis=1, keepdims=True), np.ones((1, X.shape[0])))
 
             # numpy -> torch.tensor
@@ -117,17 +112,25 @@ def predict(model, mesh, filename):
             patch_prob_output = tensor_prob_output.cpu().numpy()
 
             for i_label in range(num_classes):
-                predicted_labels_d[np.argmax(patch_prob_output[0, :], axis=-1)==i_label] = i_label
+                predicted_labels_d[np.argmax(patch_prob_output[0, :], axis=-1) == i_label] = i_label
 
-            # output downsampled predicted labels
+            # Output downsampled predicted labels
             mesh2 = mesh_d.clone()
             mesh2.celldata['MaterialIds'] = predicted_labels_d
             output_file_name = '{}_d_predicted'.format(filename[:-4])
             vedo.write(mesh2, os.path.join(output_path, output_file_name + ".vtp"))
 
+            # Compute distances between adjacent labels
+            distances = calculate_distances(mesh2)
+
             print('Sample filename: {} completed'.format(filename))
 
-            return output_file_name
+            return {
+                "filename": output_file_name + ".vtp",
+                "prediction_file": open(os.path.join(output_path, output_file_name + ".vtp")).read(),
+                "distances": distances
+            }
+
 
 
 def predict_alpha(model, mesh, filename):
@@ -325,7 +328,7 @@ def predict_alpha(model, mesh, filename):
             print('Sample filename: {} completed'.format(filename))
             print('\tcomputing time: {0:.2f} sec'.format(end_time-start_time))
 
-            # print('Sample filename: {} completed'.format(filename))
+            print('Sample filename: {} completed'.format(filename))
             # return output_file_name
 
             return [output_file_name, output_file_name_d_refined, output_file_name_refined]
